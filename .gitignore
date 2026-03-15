@@ -1,0 +1,11 @@
+data
+logs
+New folder
+Primary_Project_Code/__pycache__
+Primary_Project_Code/logs
+Primary_Project_Code/venv
+Primary_Project_Code/terminal-task-manager
+Primary_Project_Code/__init__.py
+.env
+google_drive_credentials.json
+__pycache__

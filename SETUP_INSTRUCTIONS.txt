@@ -1,0 +1,140 @@
+╔════════════════════════════════════════════════════════════════════╗
+║           SYSTEM MANAGER CLI - SETUP INSTRUCTIONS                  ║
+╚════════════════════════════════════════════════════════════════════╝
+
+📋 QUICK START GUIDE
+===================
+
+STEP 1: Install Python (if you don't have it)
+---------
+• Download from: https://www.python.org/downloads/
+• Choose Python 3.8 or higher
+• ⭐ IMPORTANT: Check "Add Python to PATH" during installation
+• Click Install
+
+STEP 2: Extract the files
+---------
+• Extract system_manager_cli to your desired location
+• Example: C:\MyTools\system_manager_cli
+
+STEP 3: Install Required Packages
+---------
+• Open Command Prompt (search for "cmd" in Windows)
+• Navigate to the folder where you extracted the files:
+    cd C:\MyTools\system_manager_cli
+
+• Install dependencies:
+    pip install -r requirements.txt
+
+• Wait until it says "Successfully installed"
+
+STEP 4: Configure Settings (Optional)
+---------
+• Find the .env.example file
+• Make a copy and rename it to .env
+• Edit .env with a text editor:
+    - EMAIL_SENDER: Your Gmail address (for alerts)
+    - EMAIL_PASSWORD: Your Gmail app password
+    - CPU_THRESHOLD: Alert when CPU exceeds this (e.g., 80%)
+    - BACKUP_DRIVE: Where to save backups (e.g., D:\Backups)
+
+Note: Email setup is optional for basic health checks
+
+STEP 5: Run the Program
+---------
+
+OPTION A - Interactive Menu (Easiest) ⭐
+--------
+  Double-click: run_cli.bat
+
+  Or from Command Prompt:
+    python main.py
+
+  Select options from the menu
+
+OPTION B - Command Line
+--------
+  Check system health:
+    python main.py check-health
+
+  Backup a folder:
+    python main.py backup-folder "C:\Your\Folder\Path"
+
+  Clean temporary files:
+    python main.py clean-temp "C:\Temp\Folder\Path"
+
+  Generate report:
+    python main.py generate-report "C:\Logs\File.log"
+
+🎯 RECOMMENDED USAGE
+===================
+1. Start with:     python main.py check-health
+2. Then setup:     python main.py setup
+3. Regular use:    Double-click run_cli.bat for menu
+
+❓ TROUBLESHOOTING
+==================
+
+❌ "Python is not recognized"
+   → Python is not in your PATH
+   → Reinstall Python and check "Add Python to PATH"
+
+❌ "No module named 'click'"
+   → Dependencies not installed
+   → Run: pip install -r requirements.txt
+
+❌ "Permission denied" (when backing up)
+   → Close other programs using those files
+   → Or run Command Prompt as Administrator
+
+✅ "All systems normal!"
+   → Your system is healthy!
+   → Save backups regularly
+
+📧 EMAIL SETUP (Optional)
+=========================
+For email alerts when thresholds are exceeded:
+1. Use Gmail app password (not your regular password)
+2. Create app password:
+   - Go to: https://myaccount.google.com/apppasswords
+   - Generate password for "Windows Mail"
+3. Add to .env:
+   EMAIL_SENDER=your_email@gmail.com
+   EMAIL_PASSWORD=your_app_password
+   EMAIL_RECIPIENT=recipient_email@gmail.com
+4. Run with: python main.py check-health --email
+
+📂 FILE ORGANIZATION
+====================
+When you use clean-temp, files are organized into:
+  • Images/       → photos, pictures
+  • Videos/       → movies, clips
+  • Documents/    → PDFs, Word docs
+  • Audio/        → music, sound files
+  • Archives/     → ZIP, RAR files
+  • Code/         → Python, JS, etc.
+
+🔄 BACKUPS
+==========
+• Automatic compression to ZIP
+• Keeps last 7 backups by default
+• Stored in BACKUP_DRIVE location
+• Full logging of all operations
+
+📊 REPORTS
+==========
+Analyze log files for:
+• Error count
+• Warning count
+• Failed login attempts
+• System events
+• Exported to CSV format
+
+🆘 NEED HELP?
+=============
+1. Read the README.md file
+2. Check the logs/ folder for error messages
+3. Make sure all dependencies are installed
+
+VERSION: 1.0
+CREATED: 2026-02-20
