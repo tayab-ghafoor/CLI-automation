@@ -183,36 +183,45 @@ class BackupManager:
         except Exception as e:
             logger.error(f"Error during directory copy: {e}")
             return False
+
+    def _compress_backup(self, folder_path, zip_path):
         """
-        Compress backup folder into a zip file
+        Compress a backup folder into a zip file and remove the original folder.
+        
+        Args:
+            folder_path: Path to the folder to compress
+            zip_path: Destination zip path
         
         Returns:
-            bool: True if successful, False otherwise
+            bool: True on success, False otherwise
         """
         try:
+            folder_path = Path(folder_path)
+            zip_path = Path(zip_path)
+
             logger.info(f"Compressing backup to {zip_path}")
-            
             ignore_dirs = {'__pycache__', 'node_modules', '.git', '.svn', '.hg', 'logs', 'reports', 'data'}
-            
+
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for root, dirs, files in os.walk(folder_path):
                     # Remove ignored directories from dirs to prevent walking into them
                     dirs[:] = [d for d in dirs if d not in ignore_dirs]
-                    
+
                     for file in files:
                         file_path = Path(root) / file
                         try:
-                            arcname = file_path.relative_to(self.backup_base)
+                            # Store paths relative to backup_base for cleaner archive
+                            arcname = file_path.relative_to(folder_path.parent)
                             zipf.write(file_path, arcname)
                         except Exception as e:
                             logger.warning(f"Failed to add {file_path} to zip: {e}")
                             continue
-            
+
             # Delete original folder after compression
             shutil.rmtree(folder_path)
             logger.info(f"Backup compressed successfully: {zip_path}")
             return True
-        
+
         except Exception as e:
             logger.error(f"Compression failed: {e}")
             return False
@@ -438,22 +447,6 @@ class BackupManager:
             
             return success
         
-        except Exception as e:
-            logger.error(f"Error uploading to Rclone: {e}")
-            return False
-            remote_path
-            
-            
-            if success:
-                logger.info(f"Successfully uploaded backup to {remote_name}")
-                return True
-            else:
-                logger.error(f"Failed to upload backup to {remote_name}")
-                return False
-        
-        except ImportError as e:
-            logger.error(f"Rclone manager not available: {e}")
-            return False
         except Exception as e:
             logger.error(f"Error uploading to Rclone: {e}")
             return False
