@@ -123,6 +123,156 @@ def _coerce_backup_sources_arg(sources: str | list[str] | tuple[str, ...]) -> tu
     return normalized
 
 
+def _run_email_cloud_backup(sources: tuple[str, ...]) -> None:
+    """
+    Backup files/folders to cloud storage via email.
+    Users can backup to their login email or provide another email.
+    """
+    if not sources:
+        raise PathError("At least one file or folder path is required for backup.")
+    
+    source_paths = _prepare_backup_sources(sources)
+    
+    # Step 1: Ask user if they want to use their login email or provide another
+    backup_email = None
+    
+    if is_user_logged_in():
+        login_email = current_user.get('email')
+        click.echo(f"\n📧 Your registered email: {login_email}")
+        click.echo("Do you want to backup data to this email?")
+        
+        use_login_email = click.confirm("Use your registered email for backup?", default=True)
+        
+        if use_login_email:
+            backup_email = login_email
+        else:
+            backup_email = click.prompt("Enter email for backup storage", type=str)
+    else:
+        click.secho("❌ You must login first to use email-based cloud backup!", fg='red')
+        logger.warning("Email cloud backup attempted without login")
+        return
+    
+    if not backup_email:
+        click.secho("❌ No email provided for backup!", fg='red')
+        return
+    
+    # Step 2: Validate email format
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not __import__('re').match(email_pattern, backup_email):
+        click.secho(f"❌ Invalid email format: {backup_email}", fg='red')
+        logger.error(f"Invalid email format for backup: {backup_email}")
+        return
+    
+    click.echo(f"\n☁️  Cloud Backup to Email: {backup_email}")
+    click.echo(f"Sources: {len(source_paths)} item(s) selected")
+    
+    # Step 3: Create backups and upload to cloud
+    total_size = sum(_calculate_backup_item_size(source_path) for source_path in source_paths)
+    click.echo(f"Total size: {total_size / (1024**2):.2f} MB\n")
+    
+    # Check internet connectivity
+    import socket
+    def _has_internet(timeout: float = 3.0) -> bool:
+        try:
+            socket.create_connection(("8.8.8.8", 53), timeout=timeout)
+            return True
+        except Exception:
+            return False
+    
+    if not _has_internet():
+        click.secho("⚠️  No internet connection detected. Cloud backup requires internet.", fg='yellow')
+        if not click.confirm("Continue waiting for internet connection?", default=True):
+            return
+        
+        logger.info("Waiting for internet connection for cloud backup...")
+        click.echo("Waiting for internet connection...")
+        wait_start = datetime.now()
+        
+        while not _has_internet():
+            time.sleep(3)
+        
+        wait_end = datetime.now()
+        wait_seconds = int((wait_end - wait_start).total_seconds())
+        click.secho(f"✅ Internet restored after {wait_seconds}s", fg='green')
+        logger.info(f"Internet connection restored after {wait_seconds}s")
+    
+    # Step 4: Create backups locally first, then upload to Google Drive
+    click.echo("📦 Creating backups and uploading to cloud storage...\n")
+    
+    try:
+        from Primary_Project_Code.google_drive_manager import GoogleDriveManager
+    except ImportError:
+        click.secho("❌ Google Drive module not available. Please install required dependencies.", fg='red')
+        logger.error("GoogleDriveManager import failed")
+        return
+    
+    completed_uploads = 0
+    
+    for source_path in source_paths:
+        try:
+            item_size = _calculate_backup_item_size(source_path)
+            item_desc = _describe_backup_target(source_path)
+            
+            click.echo(f"Backing up {item_desc}: {source_path}")
+            click.echo(f"  Size: {item_size / (1024**2):.2f} MB")
+            
+            # Create backup locally (compressed as ZIP for cloud)
+            backup_mgr = BackupManager(str(source_path))
+            backup_path = backup_mgr.create_backup(compress=True)
+            
+            if not backup_path:
+                click.secho(f"❌ Failed to create backup for: {source_path}", fg='red')
+                logger.error(f"Backup creation failed for: {source_path}")
+                continue
+            
+            click.echo(f"✅ Backup created: {backup_path}")
+            logger.info(f"Backup created: {backup_path}")
+            
+            # Upload to Google Drive
+            click.echo(f"Uploading to Google Drive for {backup_email}...")
+            
+            success = backup_mgr.upload_to_rclone(
+                backup_path,
+                remote_name='gdrive',
+                remote_path='/System Backups',
+                progress_callback=make_click_progress_callback("Cloud upload")
+            )
+            
+            if success:
+                click.secho(f"✅ Successfully uploaded to Google Drive!", fg='green')
+                logger.info(f"Backup uploaded to Google Drive: {backup_path}")
+                
+                # Send confirmation email
+                try:
+                    backup_mgr.send_backup_email(backup_email, backup_path, "Cloud Backup")
+                    logger.info(f"Confirmation email sent to {backup_email}")
+                except Exception as e:
+                    logger.warning(f"Failed to send confirmation email: {e}")
+                
+                completed_uploads += 1
+            else:
+                click.secho(f"❌ Cloud upload failed for: {source_path}", fg='red')
+                logger.error(f"Cloud upload failed for: {source_path}")
+        
+        except Exception as e:
+            click.secho(f"❌ Error processing {source_path}: {str(e)}", fg='red')
+            logger.error(f"Error in email cloud backup for {source_path}: {e}")
+            continue
+    
+    # Final summary
+    click.echo()
+    if completed_uploads == len(source_paths):
+        click.secho(f"✅ Cloud backup completed successfully for all {completed_uploads} item(s)!", fg='green')
+        click.secho(f"📧 Confirmation emails sent to: {backup_email}", fg='green')
+        logger.info(f"Email cloud backup completed: {completed_uploads}/{len(source_paths)} items uploaded")
+    elif completed_uploads > 0:
+        click.secho(f"⚠️  Cloud backup completed for {completed_uploads} of {len(source_paths)} item(s).", fg='yellow')
+        logger.warning(f"Email cloud backup partial: {completed_uploads}/{len(source_paths)} items uploaded")
+    else:
+        click.secho("❌ Cloud backup failed for all items!", fg='red')
+        raise BackupError("Email cloud backup failed for all selected items.")
+
+
 def _run_backup_operation(
     sources: tuple[str, ...],
     backup_drive: Optional[str],
@@ -291,6 +441,37 @@ def _run_password_reset_flow(default_email: str = "") -> bool:
     return False
 
 
+def _prompt_google_drive_email(login_email: Optional[str] = None) -> str:
+    """
+    Prompt user to select email for Google Drive backup.
+    
+    Args:
+        login_email: The user's logged-in email address
+    
+    Returns:
+        str: Selected email address for Google Drive backup
+    """
+    if login_email:
+        click.echo(f"\n📧 Your registered email: {login_email}")
+        use_login_email = click.confirm("Use your registered email for Google Drive backup?", default=True)
+        
+        if use_login_email:
+            return login_email
+    
+    # Prompt for another email if not using login email
+    backup_email = click.prompt("Enter email for Google Drive backup storage", type=str)
+    
+    # Validate email format
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    import re
+    
+    while not re.match(email_pattern, backup_email):
+        click.secho("❌ Invalid email format. Please try again.", fg='red')
+        backup_email = click.prompt("Enter email for Google Drive backup storage", type=str)
+    
+    return backup_email
+
+
 def _prompt_login_with_reset() -> dict[str, Any]:
     """Prompt for login and offer a password reset flow on authentication failure."""
     while True:
@@ -410,6 +591,7 @@ def scheduled_backup(
     user_email: str | None = None,
     use_google_drive: bool = False,
     remote_name: str = "gdrive",
+    drive_email: str | None = None,
 ):
     """Wrapper for scheduled backup
 
@@ -437,6 +619,13 @@ def scheduled_backup(
         # final fallback to configured default recipient
         if not user_email:
             user_email = Config.EMAIL_RECIPIENT
+        # choose an email for Google Drive uploads (used for confirmation/logging)
+        if use_google_drive:
+            if not drive_email:
+                drive_email = current_user.get('email') if is_user_logged_in() else None
+            if not drive_email:
+                drive_email = user_email
+            logger.info(f"Google Drive backup will use email: {drive_email}")
 
         validate_backup_drive()
         total_size = sum(_calculate_backup_item_size(source_path) for source_path in source_paths)
@@ -476,8 +665,9 @@ def scheduled_backup(
                     progress_callback=progress_cb
                 )
                 if uploaded:
+                    email_note = f" email={drive_email}" if drive_email else ""
                     logger.info(
-                        f"Scheduled backup uploaded to Google Drive remote '{remote_name}': {backup_path}"
+                        f"Scheduled backup uploaded to Google Drive remote '{remote_name}': {backup_path}{email_note}"
                     )
                 else:
                     logger.error(
@@ -681,10 +871,10 @@ def logout():
             current_user['email'] = None
             current_user['name'] = None
             current_user['token'] = None
-            click.secho("✅ Logged out successfully!", fg='green')
+            click.secho(" Logged out successfully!", fg='green')
             logger.info(f"User logged out: {email}")
         else:
-            click.secho(f"❌ {result['message']}", fg='red')
+            click.secho(f" {result['message']}", fg='red')
 
 
 @cli.command(name='reset-password')
@@ -701,12 +891,12 @@ def reset_password() -> None:
 def change_password(current):
     """Change your password"""
     if not is_user_logged_in():
-        click.secho("❌ You must login first!", fg='red')
+        click.secho(" You must login first!", fg='red')
         return
     
     email = current_user['email']
     if not email:
-        click.secho("❌ User email not found!", fg='red')
+        click.secho(" User email not found!", fg='red')
         return
     
     if current:
@@ -714,11 +904,11 @@ def change_password(current):
         password = click.prompt('🔐 Enter your current password', hide_input=True)
         user = auth_manager.users.get(email)
         if user and not auth_manager.verify_password(password, user['password_hash']):
-            click.secho("❌ Current password is incorrect.", fg='red')
+            click.secho(" Current password is incorrect.", fg='red')
             return
     
     while True:
-        new_password = click.prompt('🔐 Enter new password (min 8 chars, 1 uppercase, 1 digit)', hide_input=True)
+        new_password = click.prompt(' Enter new password (min 8 chars, 1 uppercase, 1 digit)', hide_input=True)
         confirm_password = click.prompt('🔐 Confirm new password', hide_input=True)
         
         if new_password != confirm_password:
@@ -854,7 +1044,8 @@ def clean_temp(folder_path: str, rename: bool, delete_duplicates: bool, report: 
 @click.option('--backup-drive', type=click.Path(exists=True), help='Backup drive path', default=None)
 @click.option('--format', type=click.Choice(['zip', 'folder', 'auto'], case_sensitive=False), default='auto', help='Backup format: zip, folder, or auto (ask)')
 @click.option('--list', 'list_backups', is_flag=True, help='List existing backups')
-def backup_folder(sources: tuple[str, ...], backup_drive: Optional[str], format: str, list_backups: bool) -> None:
+@click.option('--email-backup', is_flag=True, help='Backup to cloud storage via email')
+def backup_folder(sources: tuple[str, ...], backup_drive: Optional[str], format: str, list_backups: bool, email_backup: bool) -> None:
     """
     Backup important files or folders
     
@@ -864,84 +1055,15 @@ def backup_folder(sources: tuple[str, ...], backup_drive: Optional[str], format:
     - Backup a single file, a single folder, or multiple files/folders
     - Automatically detects whether each path is a file or a folder
     - Choose between ZIP (compressed) or folder (browse-able) format
-    - Keeps only the last 7 backups
+    - Keep only the last 7 backups
+    - Backup to cloud storage via email
     - Logs all operations
     """
     try:
-        _run_backup_operation(sources, backup_drive, format, list_backups)
-        return
-        # Validate source (file or directory)
-        source_path = validate_path_exists(source, path_type="any")
-        validate_path_readable(source_path)
-        
-        # Validate backup drive
-        if backup_drive:
-            backup_dest = validate_path_exists(backup_drive, path_type="directory")
-            validate_path_writable(backup_dest)
+        if email_backup:
+            _run_email_cloud_backup(sources)
         else:
-            validate_backup_drive()
-        
-        if list_backups:
-            try:
-                backup_mgr = BackupManager(source, backup_drive)
-                backup_mgr.list_backups()
-                return
-            except Exception as e:
-                handle_error(e, "List backups")
-                return
-        
-        # Calculate required disk space
-        if source_path.is_file():
-            item_size = source_path.stat().st_size
-            is_file = True
-        else:
-            item_size = get_folder_size(source_path)
-            is_file = False
-        
-        required_space = item_size * 1.5
-        backup_path = Path(backup_drive or Config.BACKUP_DRIVE)
-        
-        try:
-            validate_disk_space(backup_path, int(required_space))
-        except DiskSpaceError as e:
-            handle_error(e, "Backup validation")
-            return
-        
-        # Determine backup format
-        use_zip = None
-        if format.lower() == 'auto':
-            click.echo(f"\n📦 Backing up: {source}")
-            click.echo(f"   Size: {item_size / (1024**2):.2f} MB")
-            click.echo("\n💾 Choose backup format:")
-            click.echo("   [1] ZIP (compressed, smaller size, need to extract to view)")
-            click.echo("   [2] Folder (uncompressed, browse files directly on Drive)\n")
-            choice = click.prompt("Select format", type=click.Choice(['1', '2']), default='1')
-            use_zip = (choice == '1')
-        else:
-            use_zip = (format.lower() == 'zip')
-        
-        format_name = "ZIP" if use_zip else "Folder"
-        click.echo(f"\n📦 Starting backup ({format_name} format): {source}")
-        click.echo(f"   Size: {item_size / (1024**2):.2f} MB")
-        
-        backup_mgr = BackupManager(source, backup_drive)
-        backup_path = backup_mgr.create_backup(compress=use_zip)
-        backup_mgr.display_backup_status(backup_path)
-        
-        if backup_path:
-            logger.info(f"Backup created successfully: {backup_path}")
-            click.secho("✅ Backup completed!", fg='green')
-
-            # send email if user is logged in and has an email
-            if is_user_logged_in():
-                user_email = current_user.get('email')
-                if user_email:
-                    try:
-                        backup_mgr.send_backup_email(user_email, backup_path, "Manual")
-                    except Exception as e:
-                        logger.error(f"Failed to send backup email: {e}")
-        else:
-            click.secho("❌ Backup failed - no backup path returned", fg='red')
+            _run_backup_operation(sources, backup_drive, format, list_backups)
     
     except PathError as e:
         handle_error(e, "Backup operation")
@@ -1220,14 +1342,19 @@ def schedule_task(task: str, interval: int, unit: str, time_str: Optional[str],
                 return
 
             google_drive_choice = click.confirm(
-                "Do you want to backup data on Google drive? (Y/N)",
+                "Do you want to backup data to Google Drive?",
                 default=False
             )
+            google_drive_email = None
+            if google_drive_choice:
+                login_email = current_user.get('email') if is_user_logged_in() else None
+                google_drive_email = _prompt_google_drive_email(login_email)
+                logger.info(f"Scheduled Google Drive backup email selected: {google_drive_email}")
 
             if time_str:
                 task_scheduler.add_task(
                     task_id,
-                    lambda f=folder, sd=schedule_desc, ue=user_email, gd=google_drive_choice: scheduled_backup(f, sd, ue, gd),
+                    lambda f=folder, sd=schedule_desc, ue=user_email, gd=google_drive_choice, ge=google_drive_email: scheduled_backup(f, sd, ue, gd, "gdrive", ge),
                     interval,
                     unit,
                     at_time=time_str,
@@ -1237,13 +1364,13 @@ def schedule_task(task: str, interval: int, unit: str, time_str: Optional[str],
             else:
                 task_scheduler.add_task(
                     task_id,
-                    lambda f=folder, sd=schedule_desc, ue=user_email, gd=google_drive_choice: scheduled_backup(f, sd, ue, gd),
+                    lambda f=folder, sd=schedule_desc, ue=user_email, gd=google_drive_choice, ge=google_drive_email: scheduled_backup(f, sd, ue, gd, "gdrive", ge),
                     interval,
                     unit,
                 )
             if task_id in task_scheduler.tasks:
                 task_scheduler.tasks[task_id]['action_name'] = 'scheduled_backup'
-                task_scheduler.tasks[task_id]['action_args'] = [folder, schedule_desc, user_email, google_drive_choice]
+                task_scheduler.tasks[task_id]['action_args'] = [folder, schedule_desc, user_email, google_drive_choice, google_drive_email]
                 task_scheduler.tasks[task_id]['action_kwargs'] = {}
                 if user_email:
                     task_scheduler.tasks[task_id]['user_email'] = user_email
@@ -1403,10 +1530,10 @@ def remove_task() -> None:
         tasks = task_scheduler.list_tasks()
         
         if not tasks:
-            click.secho("❌ No tasks scheduled yet", fg='yellow')
+            click.secho(" No tasks scheduled yet", fg='yellow')
             return
         
-        click.secho("\n📋 Available Tasks:", fg='cyan')
+        click.secho("\n Available Tasks:", fg='cyan')
         task_ids = list(tasks.keys())
         
         for i, task_id in enumerate(task_ids, 1):
@@ -1437,7 +1564,7 @@ def run_async_demo(monitor: bool) -> None:
     Demonstrates async/await capabilities for parallel operations
     """
     try:
-        click.secho("🚀 Running async task demo...", fg='cyan')
+        click.secho(" Running async task demo...", fg='cyan')
         
         # Create async tasks
         health_task = async_health_check()
@@ -1445,8 +1572,8 @@ def run_async_demo(monitor: bool) -> None:
         # Run multiple health checks concurrently
         results = asyncio.run(run_async_tasks(health_task, health_task, health_task))
         
-        click.secho("✅ Async demo completed!", fg='green')
-        click.echo(f"\n📊 Results: Ran 3 concurrent health checks")
+        click.secho("Async demo completed!", fg='green')
+        click.echo(f"\n Results: Ran 3 concurrent health checks")
         
         if results[0]:
             result = results[0]
@@ -1472,7 +1599,7 @@ def interactive_menu() -> None:
             
             click.echo("1. Login 🔐")
             click.echo("2. Register 📝")
-            click.echo("3. Exit ❌\n")
+            click.echo("3. Exit \n")
             
             choice = click.prompt("Select an option", type=click.Choice(['1', '2', '3']))
             
@@ -1486,7 +1613,7 @@ def interactive_menu() -> None:
                 
                 if result['success']:
                     _complete_login(result)
-                    click.secho(f"\n✅ Welcome {result['name']}!", fg='green')
+                    click.secho(f"\n Welcome {result['name']}!", fg='green')
                     click.secho(f"You are now logged in.\n", fg='green')
                     logger.info(f"User logged in: {result['email']}")
                     click.pause()
@@ -1496,10 +1623,10 @@ def interactive_menu() -> None:
             elif choice == '2':
                 click.clear()
                 click.secho("\n" + "="*50, fg='cyan')
-                click.secho("📝 User Registration", fg='cyan')
+                click.secho(" User Registration", fg='cyan')
                 click.secho("="*50 + "\n", fg='cyan')
                 
-                email = click.prompt('📧 Enter your email')
+                email = click.prompt(' Enter your email')
                 full_name = click.prompt('👤 Enter your full name (optional)', default='')
                 
                 while True:
@@ -1583,9 +1710,9 @@ def interactive_menu() -> None:
                     organizer.display_summary()
                     organizer.generate_report()
                     logger.info("File organization completed successfully")
-                    click.secho("✅ File organization completed!", fg='green')
+                    click.secho(" File organization completed!", fg='green')
                 else:
-                    click.secho("❌ File organization failed - no files processed", fg='red')
+                    click.secho(" File organization failed - no files processed", fg='red')
             except PathError as e:
                 handle_error(e, "File organization")
             except PermissionError as e:
@@ -1600,7 +1727,7 @@ def interactive_menu() -> None:
             click.clear()
             raw_sources = click.prompt("Enter file/folder path(s) to backup (comma-separated for multiple)")
             if not raw_sources.strip():
-                click.secho("❌ Backup path cannot be empty", fg='red')
+                click.secho(" Backup path cannot be empty", fg='red')
                 click.pause()
                 continue
                 
@@ -1631,6 +1758,13 @@ def interactive_menu() -> None:
                     remote_name = click.prompt("Enter remote name (default: gdrive)", default='gdrive')
                     source_paths = _prepare_backup_sources(sources)
                     upload_successes = 0
+                    drive_email = None
+
+                    if 'gdrive' in remote_name.lower():
+                        login_email = current_user.get('email') if is_user_logged_in() else None
+                        drive_email = _prompt_google_drive_email(login_email)
+                        click.echo(f"Using Google Drive email: {drive_email}")
+                        logger.info(f"Interactive cloud backup email selected: {drive_email}")
 
                     for source_path in source_paths:
                         backup_mgr = BackupManager(str(source_path))
@@ -1651,7 +1785,17 @@ def interactive_menu() -> None:
 
                         if upload_result:
                             upload_successes += 1
-                            logger.info(f"Backup uploaded to Rclone remote '{remote_name}': {latest_backup}")
+
+                            notify_email = drive_email or current_user.get('email')
+                            if notify_email:
+                                try:
+                                    backup_mgr.send_backup_email(str(notify_email), latest_backup, "Cloud Backup")
+                                    click.secho(f"📧 Confirmation email sent to: {notify_email}", fg='green')
+                                except Exception as e:
+                                    logger.warning(f"Failed to send confirmation email to {notify_email}: {e}")
+
+                            email_note = f" email={drive_email}" if drive_email else ""
+                            logger.info(f"Backup uploaded to Rclone remote '{remote_name}': {latest_backup}{email_note}")
                         else:
                             logger.warning(f"Rclone upload to '{remote_name}' failed for {latest_backup}")
 
@@ -1724,6 +1868,13 @@ def interactive_menu() -> None:
                         
                         remote_name = click.prompt("Enter remote name (default: gdrive)", default='gdrive')
                         
+                        drive_email = None
+                        if 'gdrive' in remote_name.lower():
+                            login_email = current_user.get('email') if is_user_logged_in() else None
+                            drive_email = _prompt_google_drive_email(login_email)
+                            click.echo(f"Using Google Drive email: {drive_email}")
+                            logger.info(f"Interactive cloud backup email selected: {drive_email}")
+
                         click.echo(f"\n🔄 Uploading backup to '{remote_name}'...")
                         progress_cb = make_click_progress_callback(f"Uploading to {remote_name}")
                         upload_result = backup_mgr.upload_to_rclone(
@@ -1732,11 +1883,22 @@ def interactive_menu() -> None:
                             '/System Backups',
                             progress_callback=progress_cb
                         )
-                        
+
                         if upload_result:
                             click.secho(f"✅ Backup uploaded to '{remote_name}' successfully!", fg='green')
                             click.secho(f"📁 Remote name: {remote_name}\n", fg='green')
-                            logger.info(f"Backup uploaded to Rclone remote '{remote_name}'")
+
+                            # Send confirmation email if possible
+                            notify_email = drive_email or current_user.get('email')
+                            if notify_email:
+                                try:
+                                    backup_mgr.send_backup_email(str(notify_email), backup_result, "Cloud Backup")
+                                    click.secho(f"📧 Confirmation email sent to: {notify_email}", fg='green')
+                                except Exception as e:
+                                    logger.warning(f"Failed to send confirmation email to {notify_email}: {e}")
+
+                            email_note = f" email={drive_email}" if drive_email else ""
+                            logger.info(f"Backup uploaded to Rclone remote '{remote_name}'{email_note}")
                         else:
                             click.secho("❌ Failed to upload to cloud storage", fg='yellow')
                             click.secho("💡 Make sure Rclone is installed and the remote is configured\n", fg='yellow')

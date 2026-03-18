@@ -786,6 +786,7 @@ def interactive_schedule(scheduler: TaskScheduler) -> None:
         day_of_month = click.prompt("Which day of the month?", type=int, default=1)
 
     google_drive_choice = False
+    google_drive_email = None
 
     main_mod = _resolve_main_module()
     if main_mod is None:
@@ -800,11 +801,18 @@ def interactive_schedule(scheduler: TaskScheduler) -> None:
         action = getattr(main_mod, 'scheduled_health_check')
     elif task == 'backup':
         google_drive_choice = click.confirm(
-            "Do you want to backup data on Google drive? (Y/N)",
+            "Do you want to backup data to Google Drive?",
             default=False
         )
+        if google_drive_choice:
+            login_email = getattr(main_mod, 'current_user', {}).get('email') if hasattr(main_mod, 'current_user') else None
+            prompt_fn = getattr(main_mod, '_prompt_google_drive_email', None)
+            if callable(prompt_fn):
+                google_drive_email = prompt_fn(login_email)
+            else:
+                google_drive_email = click.prompt("Enter email to use for Google Drive backup").strip()
         scheduled_backup = getattr(main_mod, 'scheduled_backup')
-        action = lambda sources=tuple(backup_sources or []), gd=google_drive_choice: scheduled_backup(list(sources), use_google_drive=gd)  # type: ignore[assignment]
+        action = lambda sources=tuple(backup_sources or []), gd=google_drive_choice, ge=google_drive_email: scheduled_backup(list(sources), use_google_drive=gd, drive_email=ge)  # type: ignore[assignment]
     elif task == 'cleanup':
         scheduled_cleanup = getattr(main_mod, 'scheduled_cleanup')
         action = lambda folder=folder: scheduled_cleanup(folder)  # type: ignore[assignment]
@@ -858,7 +866,7 @@ def interactive_schedule(scheduler: TaskScheduler) -> None:
         scheduler.tasks[task_id]['action_name'] = action_name_map[task]
         # save the concrete parameters so we can rebuild the wrapper
         if task == 'backup':
-            scheduler.tasks[task_id]['action_args'] = [backup_sources or [], schedule_desc, user_email, google_drive_choice]
+            scheduler.tasks[task_id]['action_args'] = [backup_sources or [], schedule_desc, user_email, google_drive_choice, google_drive_email]
         elif task == 'cleanup':
             scheduler.tasks[task_id]['action_args'] = [folder, schedule_desc, user_email]
         elif task == 'report':
